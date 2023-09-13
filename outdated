@@ -1,0 +1,141 @@
+import os
+import time
+import requests
+import asyncio
+from web3 import Web3, HTTPProvider
+
+# dotenv related
+#from dotenv import load_dotenv
+#load_dotenv()
+#my_secret = os.environ
+
+### ------------------------- SETTINGS  ------------------------- ###
+
+# if you dont want to use an .env file comment out the 3 lines above and add the info in place of "os.getenv('EXAMPLE')"
+# for endpoint you can use the default one ("https://mainnet.base.org"), or set up ankr
+
+ENDPOINT_URL =  '' # set up an ankr act here https://www.ankr.com/rpc/base/
+PRIVATE_KEY = '' # export your priv key from friendtech app
+PUBLIC_ADDR = '' # copy public key from friendtech app
+
+# "twitterUsername of user you want to monitor": {"amount of shares to buy": 1, "max cost of a share": 0.07}
+targets = {}
+
+# how often to recheck targets
+pollInterval = 0.2
+
+### --------------------------------------------------------------- ###
+
+CONTRACT_ABI = '[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"previousOwner","type":"address"},{"indexed":true,"internalType":"address","name":"newOwner","type":"address"}],"name":"OwnershipTransferred","type":"event"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"address","name":"trader","type":"address"},{"indexed":false,"internalType":"address","name":"subject","type":"address"},{"indexed":false,"internalType":"bool","name":"isBuy","type":"bool"},{"indexed":false,"internalType":"uint256","name":"shareAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"ethAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"protocolEthAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"subjectEthAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"supply","type":"uint256"}],"name":"Trade","type":"event"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"buyShares","outputs":[],"stateMutability":"payable","type":"function"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"getBuyPrice","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"getBuyPriceAfterFee","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"supply","type":"uint256"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"getPrice","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"pure","type":"function"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"getSellPrice","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"getSellPriceAfterFee","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"protocolFeeDestination","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"protocolFeePercent","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"renounceOwnership","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"sharesSubject","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"sellShares","outputs":[],"stateMutability":"payable","type":"function"},{"inputs":[{"internalType":"address","name":"_feeDestination","type":"address"}],"name":"setFeeDestination","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"_feePercent","type":"uint256"}],"name":"setProtocolFeePercent","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"_feePercent","type":"uint256"}],"name":"setSubjectFeePercent","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"},{"internalType":"address","name":"","type":"address"}],"name":"sharesBalance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"sharesSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"subjectFeePercent","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"newOwner","type":"address"}],"name":"transferOwnership","outputs":[],"stateMutability":"nonpayable","type":"function"}]'
+CONTRACT_ADDRESS = '0xCF205808Ed36593aa40a44F10c7f7C2F67d4A4d4'
+
+hexcode = "0x6945b123000000000000000000000000"
+u256 = "0000000000000000000000000000000000000000000000000000000000000001"
+
+w3 = Web3(HTTPProvider(ENDPOINT_URL))
+frenContract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+
+### ------------------------- FUNCS  ------------------------- ###
+
+def send_transaction(accountName, shares, maximumBid, target):
+
+    buy_price = frenContract.functions.getBuyPriceAfterFee(accountName, int(shares)).call()
+
+    maxCost = maximumBid * shares
+
+    print(f'Maximum bid: {maximumBid} ETH')
+    print(f'Maximum Cost: {maxCost} ETH')
+
+    # start a timer so we can tell how long repricing our buy costs
+    start_time = time.time()
+
+    # are we priced out of buying all the shares we want?
+    if (buy_price > float(maxCost) * 1e18):
+        # are we priced out of buying a smaller amount of shares?
+        if shares > 1:
+            shares -= 1
+            print(f'Retrying purchase for {shares} shares...')
+            send_transaction(accountName, shares, maximumBid, target)
+
+        else:
+            # we are priced out, remove them from targets
+            targets.pop(target)
+            print("--- %s seconds ---" % (time.time() - start_time))
+            return "Too expensive, aborting..."
+
+    # Sign and send the transaction
+    else:
+
+        nonce = w3.eth.get_transaction_count(PUBLIC_ADDR)
+        chain_id = 8453
+
+        txn = {
+            'nonce': nonce,
+            'chainId': chain_id,
+            'gas': 200000,
+            'maxFeePerGas': w3.to_wei('20', 'gwei'),
+            'maxPriorityFeePerGas': w3.to_wei('15', 'gwei'),
+        }
+
+        replacedu256 = u256[:-1] + str(shares)
+        # contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+        txdatapayload = hexcode + accountName.replace("0x", "", 1) + replacedu256
+
+        print(f'Cost of {shares} shares: {buy_price / 1e18} ETH')
+        txn['value'] = buy_price
+        txn['data'] = txdatapayload
+        txn['to'] = CONTRACT_ADDRESS
+
+        signed_txn = w3.eth.account.sign_transaction(txn, PRIVATE_KEY)
+        print("Purchasing...")
+        txn_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        receipt = w3.eth.wait_for_transaction_receipt(txn_hash)
+        print("Done! Transaction receipt: ", receipt)
+        targets.pop(target)
+        return receipt
+
+
+async def user_to_addr(user):
+    url = "https://prod-api.kosetto.com/search/users?username=" + user
+    try:
+        r = requests.get(url, headers=headers, timeout=timeOut)
+        r.raise_for_status()
+
+        if r.status_code == 200:
+                res = r.json()
+                u = [u for u in res['users'] if u['twitterUsername'] == user]
+                if len(u) == 1:
+                    return Web3.to_checksum_address(u[0]['address'])
+
+    except requests.exceptions.RequestException as e:
+        print(f'[{str(time.ctime())}] Search for {user} has an error!')
+
+async def process_target(target, amount, maxBid):
+    print('\n')
+    print("[" + str(time.ctime()) + "] Searching for " + target)
+    targetAddr = str(user_to_addr(target))
+    print("Found: " + targetAddr)
+    if (targetAddr == 'None'):
+        print("Target not on FriendTech, aborting...")
+
+    elif (int(amount) < 10):
+            userShares = frenContract.functions.sharesBalance(targetAddr, targetAddr).call()
+            if userShares > 0:
+                print('Attempting to buy share...')
+                receipt = send_transaction(targetAddr, amount, maxBid, target)
+                print(receipt)
+            else:
+                print('User has no txs, will check back later...')
+    else:
+        print("Max 9 shares (I'm lazy with formatting the hex)")
+
+
+async def main():
+
+    while len(targets) > 0:
+        tasks = [process_target(target, opts['amount'], opts['maxBid']) for (target, opts) in targets.items()]
+        await asyncio.gather(*tasks)
+        time.sleep(pollInterval)
+
+asyncio.run(main())
